@@ -1,0 +1,68 @@
+name: wireless-color
+
+# Rebuild this branch as "current upstream master + the tint patch".
+# Runs daily, so the patch follows openwrt/luci automatically.
+
+on:
+  schedule:
+    - cron: '17 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: wireless-color
+          fetch-depth: 0
+
+      - name: Set our own two files aside
+        run: |
+          mkdir -p /tmp/overlay/workflows
+          cp .github/wireless-color.patch /tmp/overlay/
+          cp .github/workflows/wireless-color.yml /tmp/overlay/workflows/
+
+      - name: Rebuild on top of upstream master
+        id: build
+        run: |
+          set -e
+          git config user.name  'rwalli'
+          git config user.email 'rwalli@gmx.at'
+
+          git remote add upstream https://github.com/openwrt/luci.git
+          git fetch --no-tags upstream master
+          git checkout -B wireless-color upstream/master
+
+          mkdir -p .github/workflows
+          cp /tmp/overlay/wireless-color.patch .github/
+          cp /tmp/overlay/workflows/wireless-color.yml .github/workflows/
+          git apply --verbose .github/wireless-color.patch
+
+          git add -A
+          git commit -q -m 'wireless: tint LuCI radios, SSIDs and associated stations'
+
+          if [ "$(git rev-parse HEAD^{tree})" = "$(git rev-parse origin/wireless-color^{tree})" ]; then
+            echo 'Nothing changed upstream, leaving the branch alone.'
+          else
+            git push -f origin wireless-color
+            echo 'Branch rebuilt on' "$(git rev-parse --short upstream/master)"
+          fi
+
+      - name: Report a broken patch
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title 'wireless-color: the patch no longer applies to upstream master' \
+            --body "The scheduled rebuild failed, so this branch still holds the previous build.
+
+          See the failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Refresh \`.github/wireless-color.patch\` against the current upstream file and push it to \`wireless-color\`." \
+            || true
