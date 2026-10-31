@@ -1,0 +1,69 @@
+name: wireless-color-25.12
+
+# Rebuild this branch as "current upstream openwrt-25.12 + the tint patch".
+# Runs daily, so the patch follows the stable release branch automatically.
+
+on:
+  schedule:
+    - cron: '47 4 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+env:
+  BRANCH: wireless-color-25.12
+  UPSTREAM_BRANCH: openwrt-25.12
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the default branch: it carries the patch, and the target
+      # branch is rebuilt from upstream anyway.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set the patch aside
+        run: cp .github/wireless-color.patch /tmp/
+
+      - name: Rebuild on top of upstream openwrt-25.12
+        run: |
+          set -e
+          git config user.name  'rwalli'
+          git config user.email 'rwalli@gmx.at'
+
+          git remote add upstream https://github.com/openwrt/luci.git
+          git fetch --no-tags upstream "$UPSTREAM_BRANCH"
+          git fetch --no-tags origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git checkout -B "$BRANCH" "upstream/$UPSTREAM_BRANCH"
+
+          mkdir -p .github
+          cp /tmp/wireless-color.patch .github/
+          git apply --verbose .github/wireless-color.patch
+
+          git add -A
+          git commit -q -m 'wireless: tint LuCI radios, SSIDs and associated stations'
+
+          if [ "$(git rev-parse HEAD^{tree})" = "$(git rev-parse -q --verify "origin/$BRANCH^{tree}" || echo none)" ]; then
+            echo "Nothing changed upstream, leaving $BRANCH alone."
+          else
+            git push -f origin "$BRANCH"
+            echo 'Branch rebuilt on' "$(git rev-parse --short "upstream/$UPSTREAM_BRANCH")"
+          fi
+
+      - name: Report a broken patch
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh issue create \
+            --title 'wireless-color-25.12: the patch no longer applies to upstream openwrt-25.12' \
+            --body "The scheduled rebuild failed, so \`wireless-color-25.12\` still holds the previous build.
+
+          See the failing run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+          Refresh \`.github/wireless-color.patch\` against the current upstream file and push it to the default branch." \
+            || true
